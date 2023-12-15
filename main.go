@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -33,6 +34,7 @@ type ChatGPTResponse struct {
 
 func main() {
 	reader := bufio.NewReader(os.Stdin)
+	var lastClientResponse string
 
 	for {
 		fmt.Print("Enter your message: ")
@@ -44,18 +46,36 @@ func main() {
 			fmt.Println("Exiting the application.")
 			os.Exit(0) // Exit the program
 		}
-		response, err := getChatGPTResponse(userInput)
+
+		// Include last client response in request if available
+		var messages []Message
+		if lastClientResponse != "" {
+			messages = append(messages, Message{Role: "system", Content: lastClientResponse})
+		}
+		messages = append(messages, Message{Role: "user", Content: userInput})
+
+		response, err := getChatGPTResponse(messages)
 		if err != nil {
 			fmt.Println("Error:", err)
 			continue
 		}
+
 		fmt.Println("Response:", response)
 
-		// To break the loop, you might want to check for a specific command like "exit".
+		if strings.HasPrefix(response, "kubectl") {
+			lastClientResponse = executeKubectlCommand(response)
+		} else {
+			lastClientResponse = ""
+		}
+
 	}
 }
 
-func getChatGPTResponse(input string) (string, error) {
+func getChatGPTResponse(messages []Message) (string, error) {
+	// Include your initial instructions along with the messages
+	initialPrompt := "I am using an automated system to manage a Kubernetes cluster. For any action that needs to be taken, please respond with a command that starts directly with 'kubectl', followed by the specific instructions. The response should be concise and formatted for machine execution. For example, if I need to list namespaces, simply reply with 'kubectl get namespaces'. Please avoid additional explanations or text outside the command itself."
+	messages = append([]Message{{Role: "system", Content: initialPrompt}}, messages...)
+
 	url := "https://api.openai.com/v1/chat/completions"
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -64,13 +84,8 @@ func getChatGPTResponse(input string) (string, error) {
 
 	// Updated request body
 	reqBody, err := json.Marshal(ChatGPTRequest{
-		Model: "gpt-3.5-turbo", // or other model as per your requirement
-		Messages: []Message{
-			{
-				Role:    "user",
-				Content: input,
-			},
-		},
+		Model:       "gpt-3.5-turbo", // or other model as per your requirement
+		Messages:    messages,
 		Temperature: 0.7,
 	})
 
@@ -111,4 +126,18 @@ func getChatGPTResponse(input string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no response from API")
+}
+
+func executeKubectlCommand(command string) string {
+	fmt.Println("Executing command:", command)
+	cmd := exec.Command("bash", "-c", command)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		fmt.Println("Error executing command:", err)
+		return "CLIENT Error: " + err.Error()
+	}
+
+	fmt.Println("Command output:", string(output))
+	return "CLIENT " + string(output)
 }
